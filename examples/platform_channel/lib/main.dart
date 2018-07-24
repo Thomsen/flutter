@@ -4,6 +4,7 @@
 
 import 'dart:async';
 
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,11 +13,28 @@ class PlatformChannel extends StatefulWidget {
   _PlatformChannelState createState() => new _PlatformChannelState();
 }
 
+class TransData {
+  String name;
+
+  TransData(this.name);
+
+  TransData.fromMap(Map<String, dynamic> map)
+      : name = map['name'];
+
+  Map<String, dynamic> toMap() => {
+    'name': name
+  };
+
+}
+
+
 class _PlatformChannelState extends State<PlatformChannel> {
   static const MethodChannel methodChannel =
       const MethodChannel('samples.flutter.io/battery');
   static const EventChannel eventChannel =
       const EventChannel('samples.flutter.io/charging');
+
+  static const MethodChannel methodPageChannel = const MethodChannel("samples.flutter.io/intent");
 
   String _batteryLevel = 'Battery level: unknown.';
   String _chargingStatus = 'Battery status: unknown.';
@@ -24,8 +42,14 @@ class _PlatformChannelState extends State<PlatformChannel> {
   Future<Null> _getBatteryLevel() async {
     String batteryLevel;
     try {
-      final int result = await methodChannel.invokeMethod('getBatteryLevel');
-      batteryLevel = 'Battery level: $result%.';
+//      final int result = await methodChannel.invokeMethod('getBatteryLevel');
+//      batteryLevel = 'Battery level: $result%.';
+
+      batteryLevel = 'Battery level: 100%';
+      TransData data = new TransData('flutter page text');
+
+      methodPageChannel.invokeMethod("openPage", data.toMap());
+
     } on PlatformException {
       batteryLevel = 'Failed to get battery level.';
     }
@@ -38,7 +62,24 @@ class _PlatformChannelState extends State<PlatformChannel> {
   void initState() {
     super.initState();
     eventChannel.receiveBroadcastStream().listen(_onEvent, onError: _onError);
+
+    methodPageChannel.setMethodCallHandler(platformCallHandler);
+
   }
+
+  Future<dynamic> platformCallHandler(MethodCall call) async {
+    switch (call.method) {
+      case "onResult": {
+        print("on result: " + call.arguments['name']);
+        setState(() {
+          TransData transData = new TransData.fromMap(call.arguments);
+          _chargingStatus = transData.name;
+        });
+        break;
+      }
+    }
+  }
+
 
   void _onEvent(Object event) {
     setState(() {
@@ -52,6 +93,7 @@ class _PlatformChannelState extends State<PlatformChannel> {
       _chargingStatus = 'Battery status: unknown.';
     });
   }
+
 
   @override
   Widget build(BuildContext context) {
