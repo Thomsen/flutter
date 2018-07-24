@@ -15,6 +15,7 @@ import '../base/process.dart';
 import '../base/process_manager.dart';
 import '../base/version.dart';
 import '../cache.dart';
+import '../flutter_manifest.dart';
 import '../globals.dart';
 import 'xcodeproj.dart';
 
@@ -83,8 +84,8 @@ class CocoaPods {
     @required Directory appIosDirectory,
     // For backward compatibility with previously created Podfile only.
     @required String iosEngineDir,
-    bool isSwift: false,
-    bool dependenciesChanged: true,
+    bool isSwift = false,
+    bool dependenciesChanged = true,
   }) async {
     if (!(await appIosDirectory.childFile('Podfile').exists())) {
       throwToolExit('Podfile missing');
@@ -150,9 +151,12 @@ class CocoaPods {
   /// Ensures the `ios` sub-project of the Flutter project at [appDirectory]
   /// contains a suitable `Podfile` and that its `Flutter/Xxx.xcconfig` files
   /// include pods configuration.
-  void setupPodfile(String appDirectory) {
+  void setupPodfile(String appDirectory, FlutterManifest manifest) {
     if (!xcodeProjectInterpreter.isInstalled) {
       // Don't do anything for iOS when host platform doesn't support it.
+      return;
+    }
+    if (!fs.directory(fs.path.join(appDirectory, 'ios')).existsSync()) {
       return;
     }
     final String podfilePath = fs.path.join(appDirectory, 'ios', 'Podfile');
@@ -171,6 +175,7 @@ class CocoaPods {
       ));
       podfileTemplate.copySync(podfilePath);
     }
+
     _addPodsDependencyToFlutterXcconfig(appDirectory, 'Debug');
     _addPodsDependencyToFlutterXcconfig(appDirectory, 'Release');
   }

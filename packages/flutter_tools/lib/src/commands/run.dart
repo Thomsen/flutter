@@ -55,8 +55,7 @@ abstract class RunCommandBase extends FlutterCommand {
   void usesPortOptions() {
     argParser.addOption('observatory-port',
         help: 'Listen to the given port for an observatory debugger connection.\n'
-              'Specifying port 0 will find a random free port.\n'
-              'Defaults to the first available port after $kDefaultObservatoryPort.'
+              'Specifying port 0 (the default) will find a random free port.'
     );
   }
 
@@ -79,14 +78,10 @@ class RunCommand extends RunCommandBase {
   @override
   final String description = 'Run your Flutter app on an attached device.';
 
-  RunCommand({ bool verboseHelp: false }) {
+  RunCommand({ bool verboseHelp = false }) {
     requiresPubspecYaml();
 
     argParser
-      ..addFlag('full-restart',
-        defaultsTo: true,
-        help: 'Stop any currently running application process before running the app.',
-      )
       ..addFlag('start-paused',
         negatable: false,
         help: 'Start in a paused mode and wait for a debugger to connect.',
@@ -128,6 +123,12 @@ class RunCommand extends RunCommandBase {
         defaultsTo: true,
         hide: !verboseHelp,
         help: 'Preview Dart 2.0 functionality.',
+      )
+      ..addFlag('build-snapshot',
+        hide: !verboseHelp,
+        defaultsTo: false,
+        help: 'Build and use application-specific VM snapshot instead of\n'
+              'prebuilt one provided by the engine.',
       )
       ..addFlag('track-widget-creation',
         hide: !verboseHelp,

@@ -20,7 +20,7 @@ import '../base/process.dart';
 import '../base/process_manager.dart';
 import '../base/utils.dart';
 import '../build_info.dart';
-import '../bundle.dart' as bundle;
+import '../flutter_manifest.dart';
 import '../globals.dart';
 import '../plugins.dart';
 import '../services.dart';
@@ -99,7 +99,7 @@ class IMobileDevice {
   Future<Process> startLogger() => runCommand(<String>['idevicesyslog']);
 
   /// Captures a screenshot to the specified outputFile.
-  Future<Null> takeScreenshot(File outputFile) {
+  Future<void> takeScreenshot(File outputFile) {
     return runCheckedAsync(<String>['idevicescreenshot', outputFile.path]);
   }
 }
@@ -189,10 +189,10 @@ class Xcode {
 Future<XcodeBuildResult> buildXcodeProject({
   BuildableIOSApp app,
   BuildInfo buildInfo,
-  String target: bundle.defaultMainPath,
+  String targetOverride,
   bool buildForDevice,
-  bool codesign: true,
-  bool usesTerminalUi: true,
+  bool codesign = true,
+  bool usesTerminalUi = true,
 }) async {
   if (!await upgradePbxProjWithFlutterAssets(app.name, app.appDirectory))
     return new XcodeBuildResult(success: false);
@@ -243,11 +243,15 @@ Future<XcodeBuildResult> buildXcodeProject({
   final Directory appDirectory = fs.directory(app.appDirectory);
   await _addServicesToBundle(appDirectory);
 
+  final FlutterManifest manifest = await FlutterManifest.createFromPath(
+    fs.currentDirectory.childFile('pubspec.yaml').path,
+  );
   updateGeneratedXcodeProperties(
     projectPath: fs.currentDirectory.path,
     buildInfo: buildInfo,
-    target: target,
+    targetOverride: targetOverride,
     previewDart2: buildInfo.previewDart2,
+    manifest: manifest,
   );
 
   if (hasPlugins()) {
@@ -271,53 +275,6 @@ Future<XcodeBuildResult> buildXcodeProject({
     );
     if (didPodInstall)
       await fingerprinter.writeFingerprint();
-  }
-
-  // If buildNumber is not specified, keep the project untouched.
-  if (buildInfo.buildNumber != null) {
-    final Status buildNumberStatus =
-        logger.startProgress('Setting CFBundleVersion...', expectSlowOperation: true);
-    try {
-      final RunResult buildNumberResult = await runAsync(
-        <String>[
-          '/usr/bin/env',
-          'xcrun',
-          'agvtool',
-          'new-version',
-          '-all',
-          buildInfo.buildNumber.toString(),
-        ],
-        workingDirectory: app.appDirectory,
-      );
-      if (buildNumberResult.exitCode != 0) {
-        throwToolExit('Xcode failed to set new version\n${buildNumberResult.stderr}');
-      }
-    } finally {
-      buildNumberStatus.stop();
-    }
-  }
-
-  // If buildName is not specified, keep the project untouched.
-  if (buildInfo.buildName != null) {
-    final Status buildNameStatus =
-        logger.startProgress('Setting CFBundleShortVersionString...', expectSlowOperation: true);
-    try {
-      final RunResult buildNameResult = await runAsync(
-        <String>[
-          '/usr/bin/env',
-          'xcrun',
-          'agvtool',
-          'new-marketing-version',
-          buildInfo.buildName,
-        ],
-        workingDirectory: app.appDirectory,
-      );
-      if (buildNameResult.exitCode != 0) {
-        throwToolExit('Xcode failed to set new marketing version\n${buildNameResult.stderr}');
-      }
-    } finally {
-      buildNameStatus.stop();
-    }
   }
 
   final List<String> buildCommands = <String>[
@@ -438,7 +395,7 @@ Future<XcodeBuildResult> buildXcodeProject({
             '-allowProvisioningUpdates',
             '-allowProvisioningDeviceRegistration',
           ].contains(buildCommand);
-        }),
+        }).toList(),
     workingDirectory: app.appDirectory,
   ));
 
