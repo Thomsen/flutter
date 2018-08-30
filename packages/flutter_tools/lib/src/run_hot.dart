@@ -9,6 +9,7 @@ import 'package:json_rpc_2/error_code.dart' as rpc_error_code;
 import 'package:json_rpc_2/json_rpc_2.dart' as rpc;
 import 'package:meta/meta.dart';
 
+import 'base/common.dart';
 import 'base/context.dart';
 import 'base/file_system.dart';
 import 'base/logger.dart';
@@ -16,6 +17,7 @@ import 'base/utils.dart';
 import 'build_info.dart';
 import 'compile.dart';
 import 'dart/dependencies.dart';
+import 'dart/pub.dart';
 import 'device.dart';
 import 'globals.dart';
 import 'resident_runner.dart';
@@ -62,7 +64,7 @@ class HotRunner extends ResidentRunner {
              ipv6: ipv6);
 
   final bool benchmarkMode;
-  final String applicationBinary;
+  final File applicationBinary;
   final bool hostIsIde;
   Set<String> _dartDependencies;
   final String dillOutputPath;
@@ -77,7 +79,7 @@ class HotRunner extends ResidentRunner {
     benchmarkData[name].add(value);
   }
 
-  bool _refreshDartDependencies() {
+  Future<bool> _refreshDartDependencies() async {
     if (!hotRunnerConfig.computeDartDependencies) {
       // Disabled.
       return true;
@@ -86,6 +88,22 @@ class HotRunner extends ResidentRunner {
       // Already computed.
       return true;
     }
+
+    try {
+      // Will return immediately if pubspec.yaml is up-to-date.
+      await pubGet(
+        context: PubContext.pubGet,
+        directory: projectRootPath,
+      );
+    } on ToolExit catch (error) {
+      printError(
+        'Unable to reload your application because "flutter packages get" failed to update '
+        'package dependencies.\n'
+        '$error'
+      );
+      return false;
+    }
+
     final DartDependencySetBuilder dartDependencySetBuilder =
         new DartDependencySetBuilder(mainPath, packagesFilePath);
     try {
@@ -131,7 +149,7 @@ class HotRunner extends ResidentRunner {
 
   Future<int> attach({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
-    Completer<Null> appStartedCompleter,
+    Completer<void> appStartedCompleter,
     String viewFilter,
   }) async {
     try {
@@ -162,7 +180,7 @@ class HotRunner extends ResidentRunner {
       return 3;
     }
     final Stopwatch initialUpdateDevFSsTimer = new Stopwatch()..start();
-    final bool devfsResult = await _updateDevFS();
+    final bool devfsResult = await _updateDevFS(fullRestart: true);
     _addBenchmarkData('hotReloadInitialDevFSSyncMilliseconds',
         initialUpdateDevFSsTimer.elapsed.inMilliseconds);
     if (!devfsResult)
@@ -217,7 +235,7 @@ class HotRunner extends ResidentRunner {
   @override
   Future<int> run({
     Completer<DebugConnectionInfo> connectionInfoCompleter,
-    Completer<Null> appStartedCompleter,
+    Completer<void> appStartedCompleter,
     String route,
     bool shouldBuild = true
   }) async {
@@ -230,7 +248,7 @@ class HotRunner extends ResidentRunner {
     }
 
     // Determine the Dart dependencies eagerly.
-    if (!_refreshDartDependencies()) {
+    if (!await _refreshDartDependencies()) {
       // Some kind of source level error or missing file in the Dart code.
       return 1;
     }
@@ -282,7 +300,7 @@ class HotRunner extends ResidentRunner {
   }
 
   Future<bool> _updateDevFS({ bool fullRestart = false }) async {
-    if (!_refreshDartDependencies()) {
+    if (!await _refreshDartDependencies()) {
       // Did not update DevFS because of a Dart source error.
       return false;
     }
@@ -306,6 +324,7 @@ class HotRunner extends ResidentRunner {
         fileFilter: _dartDependencies,
         fullRestart: fullRestart,
         projectRootPath: projectRootPath,
+        pathToReload: getReloadPath(fullRestart: fullRestart),
       );
       if (!result)
         return false;
@@ -422,8 +441,7 @@ class HotRunner extends ResidentRunner {
         : mainPath;
     await _launchFromDevFS(launchPath);
     restartTimer.stop();
-    printTrace('Restart performed in '
-        '${getElapsedAsMilliseconds(restartTimer.elapsed)}.');
+    printTrace('Hot restart performed in ${getElapsedAsMilliseconds(restartTimer.elapsed)}.');
     // We are now running from sources.
     _runningFromSnapshot = false;
     _addBenchmarkData('hotRestartMillisecondsToFrame',
@@ -475,26 +493,21 @@ class HotRunner extends ResidentRunner {
 
   @override
   Future<OperationResult> restart({ bool fullRestart = false, bool pauseAfterRestart = false }) async {
+    final Stopwatch timer = new Stopwatch()..start();
     if (fullRestart) {
       final Status status = logger.startProgress(
         'Performing hot restart...',
-        progressId: 'hot.restart'
+        progressId: 'hot.restart',
       );
       try {
-        final Stopwatch timer = new Stopwatch()..start();
-        if (!(await hotRunnerConfig.setupHotRestart())) {
-          status.cancel();
+        if (!(await hotRunnerConfig.setupHotRestart()))
           return new OperationResult(1, 'setupHotRestart failed');
-        }
         await _restartFromSources();
-        timer.stop();
+      } finally {
         status.cancel();
-        printStatus('Restarted app in ${getElapsedAsMilliseconds(timer.elapsed)}.');
-        return OperationResult.ok;
-      } catch (error) {
-        status.cancel();
-        rethrow;
       }
+      printStatus('Restarted application in ${getElapsedAsMilliseconds(timer.elapsed)}.');
+      return OperationResult.ok;
     } else {
       final bool reloadOnTopOfSnapshot = _runningFromSnapshot;
       final String progressPrefix = reloadOnTopOfSnapshot ? 'Initializing' : 'Performing';
@@ -502,20 +515,17 @@ class HotRunner extends ResidentRunner {
         '$progressPrefix hot reload...',
         progressId: 'hot.reload'
       );
+      OperationResult result;
       try {
-        final Stopwatch timer = new Stopwatch()..start();
-        final OperationResult result = await _reloadSources(pause: pauseAfterRestart);
-        timer.stop();
+        result = await _reloadSources(pause: pauseAfterRestart);
+      } finally {
         status.cancel();
-        if (result.isOk)
-          printStatus('${result.message} in ${getElapsedAsMilliseconds(timer.elapsed)}.');
-        if (result.hintMessage != null)
-          printStatus('\n${result.hintMessage}');
-        return result;
-      } catch (error) {
-        status.cancel();
-        rethrow;
       }
+      if (result.isOk)
+        printStatus('${result.message} in ${getElapsedAsMilliseconds(timer.elapsed)}.');
+      if (result.hintMessage != null)
+        printStatus('\n${result.hintMessage}');
+      return result;
     }
   }
 
@@ -561,7 +571,7 @@ class HotRunner extends ResidentRunner {
     final Stopwatch vmReloadTimer = new Stopwatch()..start();
     try {
       final String entryPath = fs.path.relative(
-        debuggingOptions.buildInfo.previewDart2 ? mainPath + '.dill' : mainPath,
+        getReloadPath(fullRestart: false),
         from: projectRootPath,
       );
       final Completer<Map<String, dynamic>> retrieveFirstReloadReport = new Completer<Map<String, dynamic>>();
@@ -618,9 +628,11 @@ class HotRunner extends ResidentRunner {
       final int errorCode = error['code'];
       final String errorMessage = error['message'];
       if (errorCode == Isolate.kIsolateReloadBarred) {
-        printError('Unable to hot reload app due to an unrecoverable error in '
-                   'the source code. Please address the error and then use '
-                   '"R" to restart the app.');
+        printError(
+          'Unable to hot reload application due to an unrecoverable error in '
+          'the source code. Please address the error and then use "R" to '
+          'restart the app.'
+        );
         flutterUsage.sendEvent('hot', 'reload-barred');
         return new OperationResult(errorCode, errorMessage);
       }
@@ -695,8 +707,7 @@ class HotRunner extends ResidentRunner {
         reassembleTimer.elapsed.inMilliseconds);
 
     reloadTimer.stop();
-    printTrace('Hot reload performed in '
-        '${getElapsedAsMilliseconds(reloadTimer.elapsed)}.');
+    printTrace('Hot reload performed in ${getElapsedAsMilliseconds(reloadTimer.elapsed)}.');
     // Record complete time it took for the reload.
     _addBenchmarkData('hotReloadMillisecondsToFrame',
         reloadTimer.elapsed.inMilliseconds);

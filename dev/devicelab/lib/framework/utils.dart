@@ -77,15 +77,23 @@ void fail(String message) {
   throw new BuildFailedError(message);
 }
 
-void rm(FileSystemEntity entity) {
-  if (entity.existsSync())
-    entity.deleteSync();
+// Remove the given file or directory.
+void rm(FileSystemEntity entity, { bool recursive = false}) {
+  if (entity.existsSync()) {
+    // This should not be necessary, but it turns out that
+    // on Windows it's common for deletions to fail due to
+    // bogus (we think) "access denied" errors.
+    try {
+      entity.deleteSync(recursive: recursive);
+    } on FileSystemException catch (error) {
+      print('Failed to delete ${entity.path}: $error');
+    }
+  }
 }
 
 /// Remove recursively.
 void rmTree(FileSystemEntity entity) {
-  if (entity.existsSync())
-    entity.deleteSync(recursive: true);
+  rm(entity, recursive: true);
 }
 
 List<FileSystemEntity> ls(Directory directory) => directory.listSync();
@@ -228,7 +236,7 @@ Future<Process> startProcess(
   _runningProcesses.add(processInfo);
 
   process.exitCode.then((int exitCode) {
-    print('exitcode: $exitCode');
+    print('"$executable" exit code: $exitCode');
     _runningProcesses.remove(processInfo);
   });
 
@@ -244,7 +252,7 @@ Future<Null> forceQuitRunningProcesses() async {
 
   // Whatever's left, kill it.
   for (ProcessInfo p in _runningProcesses) {
-    print('Force quitting process:\n$p');
+    print('Force-quitting process:\n$p');
     if (!p.process.kill()) {
       print('Failed to force quit process');
     }
@@ -257,9 +265,10 @@ Future<int> exec(
   String executable,
   List<String> arguments, {
   Map<String, String> environment,
-  bool canFail = false,
+  bool canFail = false, // as in, whether failures are ok. False means that they are fatal.
+  String workingDirectory,
 }) async {
-  final Process process = await startProcess(executable, arguments, environment: environment);
+  final Process process = await startProcess(executable, arguments, environment: environment, workingDirectory: workingDirectory);
 
   final Completer<Null> stdoutDone = new Completer<Null>();
   final Completer<Null> stderrDone = new Completer<Null>();
@@ -280,7 +289,7 @@ Future<int> exec(
   final int exitCode = await process.exitCode;
 
   if (exitCode != 0 && !canFail)
-    fail('Executable failed with exit code $exitCode.');
+    fail('Executable "$executable" failed with exit code $exitCode.');
 
   return exitCode;
 }
@@ -292,9 +301,10 @@ Future<String> eval(
   String executable,
   List<String> arguments, {
   Map<String, String> environment,
-  bool canFail = false,
+  bool canFail = false, // as in, whether failures are ok. False means that they are fatal.
+  String workingDirectory,
 }) async {
-  final Process process = await startProcess(executable, arguments, environment: environment);
+  final Process process = await startProcess(executable, arguments, environment: environment, workingDirectory: workingDirectory);
 
   final StringBuffer output = new StringBuffer();
   final Completer<Null> stdoutDone = new Completer<Null>();
@@ -317,14 +327,14 @@ Future<String> eval(
   final int exitCode = await process.exitCode;
 
   if (exitCode != 0 && !canFail)
-    fail('Executable failed with exit code $exitCode.');
+    fail('Executable "$executable" failed with exit code $exitCode.');
 
   return output.toString().trimRight();
 }
 
 Future<int> flutter(String command, {
   List<String> options = const <String>[],
-  bool canFail = false,
+  bool canFail = false, // as in, whether failures are ok. False means that they are fatal.
   Map<String, String> environment,
 }) {
   final List<String> args = <String>[command]..addAll(options);
@@ -335,7 +345,7 @@ Future<int> flutter(String command, {
 /// Runs a `flutter` command and returns the standard output as a string.
 Future<String> evalFlutter(String command, {
   List<String> options = const <String>[],
-  bool canFail = false,
+  bool canFail = false, // as in, whether failures are ok. False means that they are fatal.
   Map<String, String> environment,
 }) {
   final List<String> args = <String>[command]..addAll(options);
@@ -362,7 +372,7 @@ Future<String> findJavaHome() async {
   return path.dirname(path.dirname(javaBinary));
 }
 
-Future<dynamic> inDirectory(dynamic directory, Future<dynamic> action()) async {
+Future<T> inDirectory<T>(dynamic directory, Future<T> action()) async {
   final String previousCwd = cwd;
   try {
     cd(directory);
@@ -414,7 +424,7 @@ Future<Null> getFlutter(String revision) async {
   section('Get Flutter!');
 
   if (exists(flutterDirectory)) {
-    rmTree(flutterDirectory);
+    flutterDirectory.deleteSync(recursive: true);
   }
 
   await inDirectory(flutterDirectory.parent, () async {
@@ -528,8 +538,6 @@ int parseServicePort(String line, {
   // e.g. "An Observatory debugger and profiler on ... is available at: http://127.0.0.1:8100/"
   final RegExp pattern = new RegExp('$prefix(\\S+:(\\d+)/\\S*)\$', multiLine: multiLine);
   final Match match = pattern.firstMatch(line);
-  print(pattern);
-  print(match);
   return match == null ? null : int.parse(match.group(2));
 }
 
@@ -541,7 +549,7 @@ void setLocalEngineOptionIfNecessary(List<String> options, [String flavor]) {
       // If engine flavor was not specified explicitly then scan options looking
       // for flags that specify the engine flavor (--release, --profile or
       // --debug). Default flavor to debug if no flags were found.
-      const Map<String, String> optionToFlavor = const <String, String>{
+      const Map<String, String> optionToFlavor = <String, String>{
         '--release': 'release',
         '--debug': 'debug',
         '--profile': 'profile',
@@ -557,7 +565,7 @@ void setLocalEngineOptionIfNecessary(List<String> options, [String flavor]) {
       flavor ??= 'debug';
     }
 
-    const Map<DeviceOperatingSystem, String> osNames = const <DeviceOperatingSystem, String>{
+    const Map<DeviceOperatingSystem, String> osNames = <DeviceOperatingSystem, String>{
       DeviceOperatingSystem.ios: 'ios',
       DeviceOperatingSystem.android: 'android',
     };

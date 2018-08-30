@@ -21,8 +21,8 @@ import 'daemon.dart';
 
 abstract class RunCommandBase extends FlutterCommand {
   // Used by run and drive commands.
-  RunCommandBase() {
-    addBuildModeFlags(defaultToRelease: false);
+  RunCommandBase({ bool verboseHelp = false }) {
+    addBuildModeFlags(defaultToRelease: false, verboseHelp: verboseHelp);
     usesFlavorOption();
     argParser
       ..addFlag('trace-startup',
@@ -78,7 +78,7 @@ class RunCommand extends RunCommandBase {
   @override
   final String description = 'Run your Flutter app on an attached device.';
 
-  RunCommand({ bool verboseHelp = false }) {
+  RunCommand({ bool verboseHelp = false }) : super(verboseHelp: verboseHelp) {
     requiresPubspecYaml();
 
     argParser
@@ -124,11 +124,14 @@ class RunCommand extends RunCommandBase {
         hide: !verboseHelp,
         help: 'Preview Dart 2.0 functionality.',
       )
-      ..addFlag('build-snapshot',
+      ..addOption('precompile',
         hide: !verboseHelp,
-        defaultsTo: false,
-        help: 'Build and use application-specific VM snapshot instead of\n'
-              'prebuilt one provided by the engine.',
+        help: 'Precompile functions specified in input file. This flag is only\n'
+              'allowed when using --dynamic. It takes a Dart compilation trace\n'
+              'file produced by the training run of the application. With this\n'
+              'flag, instead of using default Dart VM snapshot provided by the\n'
+              'engine, the application will use its own snapshot that includes\n'
+              'additional functions.'
       )
       ..addFlag('track-widget-creation',
         hide: !verboseHelp,
@@ -289,10 +292,13 @@ class RunCommand extends RunCommandBase {
           notifyingLogger: new NotifyingLogger(), logToStdout: true);
       AppInstance app;
       try {
+        final String applicationBinaryPath = argResults['use-application-binary'];
         app = await daemon.appDomain.startApp(
           devices.first, fs.currentDirectory.path, targetFile, route,
           _createDebuggingOptions(), hotMode,
-          applicationBinary: argResults['use-application-binary'],
+          applicationBinary: applicationBinaryPath == null
+              ? null
+              : fs.file(applicationBinaryPath),
           trackWidgetCreation: argResults['track-widget-creation'],
           projectRootPath: argResults['project-root'],
           packagesFilePath: globalResults['packages'],
@@ -361,13 +367,16 @@ class RunCommand extends RunCommandBase {
     }).toList();
 
     ResidentRunner runner;
+    final String applicationBinaryPath = argResults['use-application-binary'];
     if (hotMode) {
       runner = new HotRunner(
         flutterDevices,
         target: targetFile,
         debuggingOptions: _createDebuggingOptions(),
         benchmarkMode: argResults['benchmark'],
-        applicationBinary: argResults['use-application-binary'],
+        applicationBinary: applicationBinaryPath == null
+            ? null
+            : fs.file(applicationBinaryPath),
         projectRootPath: argResults['project-root'],
         packagesFilePath: globalResults['packages'],
         dillOutputPath: argResults['output-dill'],
@@ -380,7 +389,9 @@ class RunCommand extends RunCommandBase {
         target: targetFile,
         debuggingOptions: _createDebuggingOptions(),
         traceStartup: traceStartup,
-        applicationBinary: argResults['use-application-binary'],
+        applicationBinary: applicationBinaryPath == null
+            ? null
+            : fs.file(applicationBinaryPath),
         stayResident: stayResident,
         ipv6: ipv6,
       );
@@ -391,7 +402,7 @@ class RunCommand extends RunCommandBase {
     // need to know about analytics.
     //
     // Do not add more operations to the future.
-    final Completer<Null> appStartedTimeRecorder = new Completer<Null>.sync();
+    final Completer<void> appStartedTimeRecorder = new Completer<void>.sync();
     // This callback can't throw.
     appStartedTimeRecorder.future.then( // ignore: unawaited_futures
       (_) { appStartedTime = clock.now(); }

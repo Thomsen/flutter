@@ -94,13 +94,13 @@ Future<StreamChannel<String>> _defaultOpenChannel(Uri uri) async {
 }
 
 /// The default VM service request timeout.
-const Duration kDefaultRequestTimeout = const Duration(seconds: 30);
+const Duration kDefaultRequestTimeout = Duration(seconds: 30);
 
 /// Used for RPC requests that may take a long time.
-const Duration kLongRequestTimeout = const Duration(minutes: 1);
+const Duration kLongRequestTimeout = Duration(minutes: 1);
 
 /// Used for RPC requests that should never take a long time.
-const Duration kShortRequestTimeout = const Duration(seconds: 5);
+const Duration kShortRequestTimeout = Duration(seconds: 5);
 
 /// A connection to the Dart VM Service.
 class VMService {
@@ -161,8 +161,10 @@ class VMService {
         if (expression is! String || expression.isEmpty)
           throw new rpc.RpcException.invalidParams(
               'Invalid \'expression\': $expression');
-        final List<String> definitions = params['definitions'].asList;
-        final List<String> typeDefinitions = params['typeDefinitions'].asList;
+        final List<String> definitions =
+            new List<String>.from(params['definitions'].asList);
+        final List<String> typeDefinitions =
+            new List<String>.from(params['typeDefinitions'].asList);
         final String libraryUri = params['libraryUri'].asString;
         final String klass = params['klass'].exists ? params['klass'].asString : null;
         final bool isStatic = params['isStatic'].asBoolOr(false);
@@ -350,6 +352,7 @@ class VMService {
       // If the VM doesn't yet have a view, wait for one to show up.
       printTrace('Waiting for Flutter view');
       await new Future<Null>.delayed(new Duration(seconds: attemptSeconds));
+      await getVM();
       await vm.refreshViews();
     }
   }
@@ -1399,7 +1402,7 @@ class ServiceMap extends ServiceObject implements Map<String, dynamic> {
   Iterable<MapEntry<String, dynamic>> get entries => _map.entries;
   @override
   void updateAll(dynamic update(String key, dynamic value)) => _map.updateAll(update);
-  Map<RK, RV> retype<RK, RV>() => _map.cast<RK, RV>(); // ignore: deprecated_member_use,annotate_overrides
+  Map<RK, RV> retype<RK, RV>() => _map.cast<RK, RV>(); // ignore: annotate_overrides
   @override
   dynamic update(String key, dynamic update(dynamic value), {dynamic ifAbsent()}) => _map.update(key, update, ifAbsent: ifAbsent);
 }

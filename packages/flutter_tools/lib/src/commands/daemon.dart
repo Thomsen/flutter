@@ -28,7 +28,7 @@ import '../runner/flutter_command.dart';
 import '../tester/flutter_tester.dart';
 import '../vmservice.dart';
 
-const String protocolVersion = '0.4.0';
+const String protocolVersion = '0.4.1';
 
 /// A server process command. This command will start up a long-lived server.
 /// It reads JSON-RPC based commands from stdin, executes them, and returns
@@ -303,6 +303,11 @@ class DaemonDomain extends Domain {
   }
 }
 
+typedef Future<void> _RunOrAttach({
+  Completer<DebugConnectionInfo> connectionInfoCompleter,
+  Completer<void> appStartedCompleter
+});
+
 /// This domain responds to methods like [start] and [stop].
 ///
 /// It fires events for application start, stop, and stdout and stderr.
@@ -322,7 +327,7 @@ class AppDomain extends Domain {
   Future<AppInstance> startApp(
     Device device, String projectDirectory, String target, String route,
     DebuggingOptions options, bool enableHotReload, {
-    String applicationBinary,
+    File applicationBinary,
     @required bool trackWidgetCreation,
     String projectRootPath,
     String packagesFilePath,
@@ -370,7 +375,28 @@ class AppDomain extends Domain {
       );
     }
 
-    final AppInstance app = new AppInstance(_getNewAppId(), runner: runner, logToStdout: daemon.logToStdout);
+    return launch(
+        runner,
+        ({ Completer<DebugConnectionInfo> connectionInfoCompleter,
+            Completer<void> appStartedCompleter }) => runner.run(
+                connectionInfoCompleter: connectionInfoCompleter,
+                appStartedCompleter: appStartedCompleter,
+                route: route),
+        device,
+        projectDirectory,
+        enableHotReload,
+        cwd);
+  }
+
+  Future<AppInstance> launch(
+      ResidentRunner runner,
+      _RunOrAttach runOrAttach,
+      Device device,
+      String projectDirectory,
+      bool enableHotReload,
+      Directory cwd) async {
+    final AppInstance app = new AppInstance(_getNewAppId(),
+        runner: runner, logToStdout: daemon.logToStdout);
     _apps.add(app);
     _sendAppEvent(app, 'start', <String, dynamic>{
       'deviceId': device.id,
@@ -380,7 +406,7 @@ class AppDomain extends Domain {
 
     Completer<DebugConnectionInfo> connectionInfoCompleter;
 
-    if (options.debuggingEnabled) {
+    if (runner.debuggingOptions.debuggingEnabled) {
       connectionInfoCompleter = new Completer<DebugConnectionInfo>();
       // We don't want to wait for this future to complete and callbacks won't fail.
       // As it just writes to stdout.
@@ -394,20 +420,18 @@ class AppDomain extends Domain {
         _sendAppEvent(app, 'debugPort', params);
       });
     }
-    final Completer<Null> appStartedCompleter = new Completer<Null>();
+    final Completer<void> appStartedCompleter = new Completer<void>();
     // We don't want to wait for this future to complete and callbacks won't fail.
     // As it just writes to stdout.
-    appStartedCompleter.future.then<Null>((Null value) { // ignore: unawaited_futures
+    appStartedCompleter.future.then<void>((_) { // ignore: unawaited_futures
       _sendAppEvent(app, 'started');
     });
 
     await app._runInZone<Null>(this, () async {
       try {
-        await runner.run(
-          connectionInfoCompleter: connectionInfoCompleter,
-          appStartedCompleter: appStartedCompleter,
-          route: route,
-        );
+        await runOrAttach(
+            connectionInfoCompleter: connectionInfoCompleter,
+            appStartedCompleter: appStartedCompleter);
         _sendAppEvent(app, 'stop');
       } catch (error, trace) {
         _sendAppEvent(app, 'stop', <String, dynamic>{
@@ -419,7 +443,6 @@ class AppDomain extends Domain {
         _apps.remove(app);
       }
     });
-
     return app;
   }
 
@@ -808,9 +831,9 @@ class EmulatorDomain extends Domain {
 /// This class can either:
 ///   1) Send stdout messages and progress events to the client IDE
 ///   1) Log messages to stdout and send progress events to the client IDE
-///
-/// TODO(devoncarew): To simplify this code a bit, we could choose to specialize
-/// this class into two, one for each of the above use cases.
+//
+// TODO(devoncarew): To simplify this code a bit, we could choose to specialize
+// this class into two, one for each of the above use cases.
 class _AppRunLogger extends Logger {
   _AppRunLogger(this.domain, this.app, { this.parent });
 
@@ -870,10 +893,6 @@ class _AppRunLogger extends Logger {
     bool expectSlowOperation = false,
     int progressIndicatorPadding = 52,
   }) {
-    // Ignore nested progresses; return a no-op status object.
-    if (_status != null)
-      return new Status();
-
     final int id = _nextProgressId++;
 
     _sendProgressEvent(<String, dynamic>{
@@ -882,7 +901,14 @@ class _AppRunLogger extends Logger {
       'message': message,
     });
 
-    _status = new _AppLoggerStatus(this, id, progressId);
+    _status = new Status(onFinish: () {
+      _status = null;
+      _sendProgressEvent(<String, dynamic>{
+        'id': id.toString(),
+        'progressId': progressId,
+        'finished': true
+      });
+    })..start();
     return _status;
   }
 
@@ -902,37 +928,6 @@ class _AppRunLogger extends Logger {
       printStatus('event sent after app closed: $event');
     else
       domain._sendAppEvent(app, 'progress', event);
-  }
-}
-
-class _AppLoggerStatus extends Status {
-  _AppLoggerStatus(this.logger, this.id, this.progressId);
-
-  final _AppRunLogger logger;
-  final int id;
-  final String progressId;
-
-  @override
-  void start() {}
-
-  @override
-  void stop() {
-    logger._status = null;
-    _sendFinished();
-  }
-
-  @override
-  void cancel() {
-    logger._status = null;
-    _sendFinished();
-  }
-
-  void _sendFinished() {
-    logger._sendProgressEvent(<String, dynamic>{
-      'id': id.toString(),
-      'progressId': progressId,
-      'finished': true
-    });
   }
 }
 

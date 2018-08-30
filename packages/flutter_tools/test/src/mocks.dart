@@ -19,13 +19,14 @@ import 'package:flutter_tools/src/ios/simulators.dart';
 import 'package:flutter_tools/src/runner/flutter_command.dart';
 import 'package:mockito/mockito.dart';
 import 'package:process/process.dart';
-import 'package:test/test.dart';
+
+import 'common.dart';
 
 class MockApplicationPackageStore extends ApplicationPackageStore {
   MockApplicationPackageStore() : super(
     android: new AndroidApk(
       id: 'io.flutter.android.mock',
-      apkPath: '/mock/path/to/android/SkyShell.apk',
+      file: fs.file('/mock/path/to/android/SkyShell.apk'),
       launchActivity: 'io.flutter.android.mock.MockActivity'
     ),
     iOS: new BuildableIOSApp(
@@ -43,7 +44,7 @@ class MockAndroidSdk extends Mock implements AndroidSdk {
     bool withNdkSysroot = false,
     bool withSdkManager = true,
   }) {
-    final Directory dir = fs.systemTempDirectory.createTempSync('android-sdk');
+    final Directory dir = fs.systemTempDirectory.createTempSync('flutter_mock_android_sdk.');
 
     _createSdkFile(dir, 'platform-tools/adb');
 
@@ -65,18 +66,23 @@ class MockAndroidSdk extends Mock implements AndroidSdk {
 
     if (withNdkDir != null) {
       final String ndkCompiler = fs.path.join(
-          'ndk-bundle',
-          'toolchains',
-          'arm-linux-androideabi-4.9',
-          'prebuilt',
-          withNdkDir,
-          'bin',
-          'arm-linux-androideabi-gcc');
+        'ndk-bundle',
+        'toolchains',
+        'arm-linux-androideabi-4.9',
+        'prebuilt',
+        withNdkDir,
+        'bin',
+        'arm-linux-androideabi-gcc',
+      );
       _createSdkFile(dir, ndkCompiler);
     }
     if (withNdkSysroot) {
-      final String armPlatform =
-          fs.path.join('ndk-bundle', 'platforms', 'android-9', 'arch-arm');
+      final String armPlatform = fs.path.join(
+        'ndk-bundle',
+        'platforms',
+        'android-9',
+        'arch-arm',
+      );
       _createDir(dir, armPlatform);
     }
 
@@ -122,7 +128,7 @@ class MockProcessManager implements ProcessManager {
     Map<String, String> environment,
     bool includeParentEnvironment = true,
     bool runInShell = false,
-    ProcessStartMode mode = ProcessStartMode.NORMAL, // ignore: deprecated_member_use
+    ProcessStartMode mode = ProcessStartMode.normal,
   }) {
     if (!succeed) {
       final String executable = command[0];

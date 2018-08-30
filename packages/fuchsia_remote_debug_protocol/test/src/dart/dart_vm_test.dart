@@ -7,7 +7,8 @@ import 'dart:async';
 import 'package:fuchsia_remote_debug_protocol/src/dart/dart_vm.dart';
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 import 'package:mockito/mockito.dart';
-import 'package:test/test.dart';
+
+import '../../common.dart';
 
 void main() {
   group('DartVm.connect', () {
@@ -203,7 +204,7 @@ void main() {
       }
 
       // Both views should be invalid as they were missing required fields.
-      expect(failingFunction, throwsA(const isInstanceOf<RpcFormatError>()));
+      expect(failingFunction, throwsA(isInstanceOf<RpcFormatError>()));
     });
 
     test('get isolates by pattern', () async {
@@ -283,7 +284,7 @@ void main() {
       }
 
       // Both views should be invalid as they were missing required fields.
-      expect(failingFunction, throwsA(const isInstanceOf<RpcFormatError>()));
+      expect(failingFunction, throwsA(isInstanceOf<RpcFormatError>()));
     });
   });
 
@@ -299,7 +300,7 @@ void main() {
     });
 
     test('verify timeout fires', () async {
-      const Duration timeoutTime = const Duration(milliseconds: 100);
+      const Duration timeoutTime = Duration(milliseconds: 100);
       Future<json_rpc.Peer> mockVmConnectionFunction(Uri uri) {
         // Return a command that will never complete.
         when(mockPeer.sendRequest(any, any))
@@ -315,7 +316,7 @@ void main() {
         await vm.invokeRpc('somesillyfunction', timeout: timeoutTime);
       }
 
-      expect(failingFunction, throwsA(const isInstanceOf<TimeoutException>()));
+      expect(failingFunction, throwsA(isInstanceOf<TimeoutException>()));
     });
   });
 }

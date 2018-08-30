@@ -6,8 +6,8 @@ import 'dart:async';
 
 import 'package:flutter_tools/src/device.dart';
 import 'package:flutter_tools/src/protocol_discovery.dart';
-import 'package:test/test.dart';
 
+import 'src/common.dart';
 import 'src/context.dart';
 import 'src/mocks.dart';
 
@@ -62,6 +62,14 @@ void main() {
         final Future<Uri> uriFuture = discoverer.uri;
         logReader.addLine('Observatory listening on http://127.0.0.1:3333');
         final Uri uri = await uriFuture;
+        expect(uri.port, 3333);
+        expect('$uri', 'http://127.0.0.1:3333');
+      });
+
+      testUsingContext('discovers uri even if logs has ESC Ascii', () async {
+        initialize();
+        logReader.addLine('Observatory listening on http://127.0.0.1:3333 \x1b[');
+        final Uri uri = await discoverer.uri;
         expect(uri.port, 3333);
         expect('$uri', 'http://127.0.0.1:3333');
       });
