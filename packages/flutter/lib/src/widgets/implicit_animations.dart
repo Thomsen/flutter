@@ -686,6 +686,13 @@ class _AnimatedAlignState extends AnimatedWidgetBaseState<AnimatedAlign> {
 ///
 /// Only works if it's the child of a [Stack].
 ///
+/// This widget is a good choice if the _size_ of the child would end up
+/// changing as a result of this animation. If the size is intended to remain
+/// the same, with only the _position_ changing over time, then consider
+/// [SlideTransition] instead. [SlideTransition] only triggers a repaint each
+/// frame of the animation, whereas [AnimatedPositioned] will trigger a relayout
+/// as well.
+///
 /// See also:
 ///
 ///  * [AnimatedPositionedDirectional], which adapts to the ambient
@@ -828,10 +835,17 @@ class _AnimatedPositionedState extends AnimatedWidgetBaseState<AnimatedPositione
 ///
 /// Only works if it's the child of a [Stack].
 ///
+/// This widget is a good choice if the _size_ of the child would end up
+/// changing as a result of this animation. If the size is intended to remain
+/// the same, with only the _position_ changing over time, then consider
+/// [SlideTransition] instead. [SlideTransition] only triggers a repaint each
+/// frame of the animation, whereas [AnimatedPositionedDirectional] will trigger
+/// a relayout as well. ([SlideTransition] is also text-direction-aware.)
+///
 /// See also:
 ///
 ///  * [AnimatedPositioned], which specifies the widget's position visually (the
-///  * same as this widget, but for animating [Positioned]).
+///    same as this widget, but for animating [Positioned]).
 class AnimatedPositionedDirectional extends ImplicitlyAnimatedWidget {
   /// Creates a widget that animates its position implicitly.
   ///
@@ -1032,7 +1046,7 @@ class _AnimatedOpacityState extends ImplicitlyAnimatedWidgetState<AnimatedOpacit
 
   @override
   void didUpdateTweens() {
-    _opacityAnimation = _opacity.animate(controller);
+    _opacityAnimation = _opacity.animate(animation);
   }
 
   @override
@@ -1167,6 +1181,7 @@ class AnimatedPhysicalModel extends ImplicitlyAnimatedWidget {
     Key key,
     @required this.child,
     @required this.shape,
+    this.clipBehavior = Clip.none,
     this.borderRadius = BorderRadius.zero,
     @required this.elevation,
     @required this.color,
@@ -1177,6 +1192,7 @@ class AnimatedPhysicalModel extends ImplicitlyAnimatedWidget {
     @required Duration duration,
   }) : assert(child != null),
        assert(shape != null),
+       assert(clipBehavior != null),
        assert(borderRadius != null),
        assert(elevation != null),
        assert(color != null),
@@ -1194,6 +1210,9 @@ class AnimatedPhysicalModel extends ImplicitlyAnimatedWidget {
   ///
   /// This property is not animated.
   final BoxShape shape;
+
+  /// {@macro flutter.widgets.Clip}
+  final Clip clipBehavior;
 
   /// The target border radius of the rounded corners for a rectangle shape.
   final BorderRadius borderRadius;
@@ -1248,6 +1267,7 @@ class _AnimatedPhysicalModelState extends AnimatedWidgetBaseState<AnimatedPhysic
     return new PhysicalModel(
       child: widget.child,
       shape: widget.shape,
+      clipBehavior: widget.clipBehavior,
       borderRadius: _borderRadius.evaluate(animation),
       elevation: _elevation.evaluate(animation),
       color: widget.animateColor ? _color.evaluate(animation) : widget.color,

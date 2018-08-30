@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as path;
+import 'package:meta/meta.dart';
 
 typedef Future<Null> ShardRunner();
 
@@ -24,17 +25,21 @@ final String green = hasColor ? '\x1B[32m' : '';
 final String yellow = hasColor ? '\x1B[33m' : '';
 final String cyan = hasColor ? '\x1B[36m' : '';
 final String reset = hasColor ? '\x1B[0m' : '';
+final String redLine = '$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset';
+const String arrow = '⏩';
+const String clock = '🕐';
 
-const Map<String, ShardRunner> _kShards = const <String, ShardRunner>{
+const Map<String, ShardRunner> _kShards = <String, ShardRunner>{
   'analyze': _analyzeRepo,
   'tests': _runTests,
+  'tool_tests': _runToolTests,
   'coverage': _runCoverage,
-  // 'docs': handled by travis_script.sh and docs.sh
-  // 'build_and_deploy_gallery': handled by travis_script.sh
+  // 'docs': handled by docs.sh
+  // 'build_and_deploy_gallery': handled by deploy_gallery.sh
 };
 
-const Duration _kLongTimeout = const Duration(minutes: 45);
-const Duration _kShortTimeout = const Duration(minutes: 5);
+const Duration _kLongTimeout = Duration(minutes: 45);
+const Duration _kShortTimeout = Duration(minutes: 5);
 
 /// When you call this, you can pass additional arguments to pass custom
 /// arguments to flutter test. For example, you might want to call this
@@ -95,7 +100,68 @@ Future<Null> _verifyInternationalizations() async {
   print('Contents of $localizationsFile matches output of gen_localizations.dart script.');
 }
 
+Future<String> _getCommitRange() async {
+  // Using --fork-point is more conservative, and will result in the correct
+  // fork point, but when running locally, it may return nothing. Git is
+  // guaranteed to return a (reasonable, but maybe not optimal) result when not
+  // using --fork-point, so we fall back to that if we can't get a definitive
+  // fork point. See "git merge-base" documentation for more info.
+  EvalResult result = await _evalCommand(
+    'git',
+    <String>['merge-base', '--fork-point', 'FETCH_HEAD', 'HEAD'],
+    workingDirectory: flutterRoot,
+    allowNonZeroExit: true,
+  );
+  if (result.exitCode != 0) {
+    result = await _evalCommand(
+      'git',
+      <String>['merge-base', 'FETCH_HEAD', 'HEAD'],
+      workingDirectory: flutterRoot,
+    );
+  }
+  return result.stdout.trim();
+}
+
+
+Future<Null> _checkForTrailingSpaces() async {
+  if (!Platform.isWindows) {
+    final String commitRange = Platform.environment.containsKey('TEST_COMMIT_RANGE')
+        ? Platform.environment['TEST_COMMIT_RANGE']
+        : await _getCommitRange();
+    final List<String> fileTypes = <String>[
+      '*.dart', '*.cxx', '*.cpp', '*.cc', '*.c', '*.C', '*.h', '*.java', '*.mm', '*.m', '*.yml',
+    ];
+    final EvalResult changedFilesResult = await _evalCommand(
+      'git', <String>['diff', '-U0', '--no-color', '--name-only', commitRange, '--'] + fileTypes,
+      workingDirectory: flutterRoot,
+    );
+    if (changedFilesResult.stdout == null || changedFilesResult.stdout.trim().isEmpty) {
+      print('No files found that need to be checked for trailing whitespace.');
+      return;
+    }
+    // Only include files that actually exist, so that we don't try and grep for
+    // nonexistent files, which can occur when files are deleted or moved.
+    final List<String> changedFiles = changedFilesResult.stdout.split('\n').where((String filename) {
+      return new File(filename).existsSync();
+    }).toList();
+    if (changedFiles.isNotEmpty) {
+      await _runCommand('grep',
+        <String>[
+          '--line-number',
+          '--extended-regexp',
+          r'[[:blank:]]$',
+        ] + changedFiles,
+        workingDirectory: flutterRoot,
+        failureMessage: '${red}Whitespace detected at the end of source code lines.$reset\nPlease remove:',
+        expectNonZeroExit: true, // Just means a non-zero exit code is expected.
+        expectedExitCode: 1, // Indicates that zero lines were found.
+      );
+    }
+  }
+}
+
 Future<Null> _analyzeRepo() async {
+  await _verifyNoTestPackageImports(flutterRoot);
   await _verifyGeneratedPluginRegistrants(flutterRoot);
   await _verifyNoBadImportsInFlutter(flutterRoot);
   await _verifyNoBadImportsInFlutterTools(flutterRoot);
@@ -123,19 +189,30 @@ Future<Null> _analyzeRepo() async {
     options: <String>['--flutter-repo', '--watch', '--benchmark'],
   );
 
-  // Try an analysis against a big version of the gallery.
-  await _runCommand(dart,
-    <String>['--preview-dart-2', path.join(flutterRoot, 'dev', 'tools', 'mega_gallery.dart')],
-    workingDirectory: flutterRoot,
-  );
-  await _runFlutterAnalyze(path.join(flutterRoot, 'dev', 'benchmarks', 'mega_gallery'),
-    options: <String>['--watch', '--benchmark'],
-  );
+  await _checkForTrailingSpaces();
+
+  // Try analysis against a big version of the gallery; generate into a temporary directory.
+  final Directory outDir = Directory.systemTemp.createTempSync('flutter_mega_gallery.');
+
+  try {
+    await _runCommand(dart,
+      <String>[
+        '--preview-dart-2',
+        path.join(flutterRoot, 'dev', 'tools', 'mega_gallery.dart'),
+        '--out',
+        outDir.path,
+      ],
+      workingDirectory: flutterRoot,
+    );
+    await _runFlutterAnalyze(outDir.path, options: <String>['--watch', '--benchmark']);
+  } finally {
+    outDir.deleteSync(recursive: true);
+  }
 
   print('${bold}DONE: Analysis successful.$reset');
 }
 
-Future<Null> _runTests() async {
+Future<Null> _runSmokeTests() async {
   // Verify that the tests actually return failure on failure and success on
   // success.
   final String automatedTests = path.join(flutterRoot, 'dev', 'automated_tests');
@@ -204,7 +281,7 @@ Future<Null> _runTests() async {
       _runCommand(flutter,
         <String>['drive', '--use-existing-app', '-t', path.join('test_driver', 'failure.dart')],
         workingDirectory: path.join(flutterRoot, 'packages', 'flutter_driver'),
-        expectFailure: true,
+        expectNonZeroExit: true,
         printOutput: false,
         timeout: _kShortTimeout,
       ),
@@ -213,16 +290,31 @@ Future<Null> _runTests() async {
 
   // Verify that we correctly generated the version file.
   await _verifyVersion(path.join(flutterRoot, 'version'));
+}
 
-  // Run tests.
+Future<Null> _runToolTests() async {
+  await _runSmokeTests();
+
+  await _pubRunTest(
+    path.join(flutterRoot, 'packages', 'flutter_tools'),
+    enableFlutterToolAsserts: true,
+    runConcurrently: false,
+  );
+
+  print('${bold}DONE: All tests successful.$reset');
+}
+
+Future<Null> _runTests() async {
+  await _runSmokeTests();
+
   await _runFlutterTest(path.join(flutterRoot, 'packages', 'flutter'));
   await _runFlutterTest(path.join(flutterRoot, 'packages', 'flutter_localizations'));
   await _runFlutterTest(path.join(flutterRoot, 'packages', 'flutter_driver'));
   await _runFlutterTest(path.join(flutterRoot, 'packages', 'flutter_test'));
   await _runFlutterTest(path.join(flutterRoot, 'packages', 'fuchsia_remote_debug_protocol'));
-  await _pubRunTest(path.join(flutterRoot, 'packages', 'flutter_tools'));
   await _pubRunTest(path.join(flutterRoot, 'dev', 'bots'));
   await _pubRunTest(path.join(flutterRoot, 'dev', 'devicelab'));
+  await _runFlutterTest(path.join(flutterRoot, 'dev', 'integration_tests', 'android_semantics_testing'));
   await _runFlutterTest(path.join(flutterRoot, 'dev', 'manual_tests'));
   await _runFlutterTest(path.join(flutterRoot, 'dev', 'tools', 'vitool'));
   await _runFlutterTest(path.join(flutterRoot, 'examples', 'hello_world'));
@@ -259,8 +351,13 @@ Future<Null> _runCoverage() async {
 Future<Null> _pubRunTest(
   String workingDirectory, {
   String testPath,
+  bool runConcurrently = true,
+  bool enableFlutterToolAsserts = false
 }) {
-  final List<String> args = <String>['run', 'test', '-j1', '-rcompact'];
+  final List<String> args = <String>['run', 'test', '-rcompact'];
+  if (!runConcurrently) {
+    args.add('-j1');
+  }
   if (!hasColor)
     args.add('--no-color');
   if (testPath != null)
@@ -268,6 +365,14 @@ Future<Null> _pubRunTest(
   final Map<String, String> pubEnvironment = <String, String>{};
   if (new Directory(pubCache).existsSync()) {
     pubEnvironment['PUB_CACHE'] = pubCache;
+  }
+  if (enableFlutterToolAsserts) {
+    // If an existing env variable exists append to it, but only if
+    // it doesn't appear to already include enable-asserts.
+    String toolsArgs = Platform.environment['FLUTTER_TOOL_ARGS'] ?? '';
+    if (!toolsArgs.contains('--enable-asserts'))
+        toolsArgs += ' --enable-asserts';
+    pubEnvironment['FLUTTER_TOOL_ARGS'] = toolsArgs.trim();
   }
   return _runCommand(
     pub, args,
@@ -280,16 +385,19 @@ class EvalResult {
   EvalResult({
     this.stdout,
     this.stderr,
+    this.exitCode = 0,
   });
 
   final String stdout;
   final String stderr;
+  final int exitCode;
 }
 
 Future<EvalResult> _evalCommand(String executable, List<String> arguments, {
-  String workingDirectory,
+  @required String workingDirectory,
   Map<String, String> environment,
   bool skip = false,
+  bool allowNonZeroExit = false,
 }) async {
   final String commandDescription = '${path.relative(executable, from: workingDirectory)} ${arguments.join(' ')}';
   final String relativeWorkingDir = path.relative(workingDirectory);
@@ -299,6 +407,7 @@ Future<EvalResult> _evalCommand(String executable, List<String> arguments, {
   }
   _printProgress('RUNNING', relativeWorkingDir, commandDescription);
 
+  final DateTime start = new DateTime.now();
   final Process process = await Process.start(executable, arguments,
     workingDirectory: workingDirectory,
     environment: environment,
@@ -310,16 +419,19 @@ Future<EvalResult> _evalCommand(String executable, List<String> arguments, {
   final EvalResult result = new EvalResult(
     stdout: utf8.decode((await savedStdout).expand((List<int> ints) => ints).toList()),
     stderr: utf8.decode((await savedStderr).expand((List<int> ints) => ints).toList()),
+    exitCode: exitCode,
   );
 
-  if (exitCode != 0) {
+  print('$clock ELAPSED TIME: $bold${elapsedTime(start)}$reset for $commandDescription in $relativeWorkingDir: ');
+
+  if (exitCode != 0 && !allowNonZeroExit) {
     stderr.write(result.stderr);
     print(
-      '$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset\n'
+      '$redLine\n'
       '${bold}ERROR:$red Last command exited with $exitCode.$reset\n'
       '${bold}Command:$red $commandDescription$reset\n'
       '${bold}Relative working directory:$red $relativeWorkingDir$reset\n'
-      '$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset'
+      '$redLine'
     );
     exit(1);
   }
@@ -327,10 +439,16 @@ Future<EvalResult> _evalCommand(String executable, List<String> arguments, {
   return result;
 }
 
+String elapsedTime(DateTime start) {
+  return new DateTime.now().difference(start).toString();
+}
+
 Future<Null> _runCommand(String executable, List<String> arguments, {
   String workingDirectory,
   Map<String, String> environment,
-  bool expectFailure = false,
+  bool expectNonZeroExit = false,
+  int expectedExitCode,
+  String failureMessage,
   bool printOutput = true,
   bool skip = false,
   Duration timeout = _kLongTimeout,
@@ -343,6 +461,7 @@ Future<Null> _runCommand(String executable, List<String> arguments, {
   }
   _printProgress('RUNNING', relativeWorkingDir, commandDescription);
 
+  final DateTime start = new DateTime.now();
   final Process process = await Process.start(executable, arguments,
     workingDirectory: workingDirectory,
     environment: environment,
@@ -361,17 +480,23 @@ Future<Null> _runCommand(String executable, List<String> arguments, {
 
   final int exitCode = await process.exitCode.timeout(timeout, onTimeout: () {
     stderr.writeln('Process timed out after $timeout');
-    return expectFailure ? 0 : 1;
+    return expectNonZeroExit ? 0 : 1;
   });
-  if ((exitCode == 0) == expectFailure) {
+  print('$clock ELAPSED TIME: $bold${elapsedTime(start)}$reset for $commandDescription in $relativeWorkingDir: ');
+  if ((exitCode == 0) == expectNonZeroExit || (expectedExitCode != null && exitCode != expectedExitCode)) {
+    if (failureMessage != null) {
+      print(failureMessage);
+    }
     if (!printOutput) {
       stdout.writeln(utf8.decode((await savedStdout).expand((List<int> ints) => ints).toList()));
       stderr.writeln(utf8.decode((await savedStderr).expand((List<int> ints) => ints).toList()));
     }
     print(
-      '$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset\n'
-      '${bold}ERROR:$red Last command exited with $exitCode (expected: ${expectFailure ? 'non-zero' : 'zero'}).$reset\n'
-      '$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset'
+      '$redLine\n'
+      '${bold}ERROR:$red Last command exited with $exitCode (expected: ${expectNonZeroExit ? (expectedExitCode ?? 'non-zero') : 'zero'}).$reset\n'
+      '${bold}Command:$cyan $commandDescription$reset\n'
+      '${bold}Relative working directory:$red $relativeWorkingDir$reset\n'
+      '$redLine'
     );
     exit(1);
   }
@@ -404,7 +529,7 @@ Future<Null> _runFlutterTest(String workingDirectory, {
   }
   return _runCommand(flutter, args,
     workingDirectory: workingDirectory,
-    expectFailure: expectFailure,
+    expectNonZeroExit: expectFailure,
     printOutput: printOutput,
     skip: skip,
     timeout: timeout,
@@ -419,6 +544,83 @@ Future<Null> _runFlutterAnalyze(String workingDirectory, {
   );
 }
 
+Future<Null> _verifyNoTestPackageImports(String workingDirectory) async {
+  // TODO(ianh): Remove this whole test once https://github.com/dart-lang/matcher/issues/98 is fixed.
+  final List<String> shims = <String>[];
+  final List<String> errors = new Directory(workingDirectory)
+    .listSync(recursive: true)
+    .where((FileSystemEntity entity) {
+      return entity is File && entity.path.endsWith('.dart');
+    })
+    .map<String>((FileSystemEntity entity) {
+      final File file = entity;
+      final String name = path.relative(file.path, from: workingDirectory);
+      if (name.startsWith('bin/cache') ||
+          name == 'dev/bots/test.dart' ||
+          name.startsWith('.pub-cache'))
+        return null;
+      final String data = file.readAsStringSync();
+      if (data.contains("import 'package:test/test.dart'")) {
+        if (data.contains("// Defines a 'package:test' shim.")) {
+          shims.add('  $name');
+          if (!data.contains('https://github.com/dart-lang/matcher/issues/98'))
+            return '  $name: Shims must link to the isInstanceOf issue.';
+          if (data.contains("import 'package:test/test.dart' hide TypeMatcher, isInstanceOf;") &&
+              data.contains("export 'package:test/test.dart' hide TypeMatcher, isInstanceOf;"))
+            return null;
+          return '  $name: Shim seems to be missing the expected import/export lines.';
+        }
+        final int count = 'package:test'.allMatches(data).length;
+        if (file.path.contains('/test_driver/') ||
+            name.startsWith('dev/missing_dependency_tests/') ||
+            name.startsWith('dev/automated_tests/') ||
+            name.startsWith('packages/flutter/test/engine/') ||
+            name.startsWith('examples/layers/test/smoketests/raw/') ||
+            name.startsWith('examples/layers/test/smoketests/rendering/') ||
+            name.startsWith('examples/flutter_gallery/test/calculator')) {
+          // We only exempt driver tests, some of our special trivial tests.
+          // Driver tests aren't typically expected to use TypeMatcher and company.
+          // The trivial tests don't typically do anything at all and it would be
+          // a pain to have to give them a shim.
+          if (!data.contains("import 'package:test/test.dart' hide TypeMatcher, isInstanceOf;"))
+            return '  $name: test does not hide TypeMatcher and isInstanceOf from package:test; consider using a shim instead.';
+          assert(count > 0);
+          if (count == 1)
+            return null;
+          return '  $name: uses \'package:test\' $count times.';
+        }
+        if (name.startsWith('packages/flutter_test/')) {
+          // flutter_test has deep ties to package:test
+          return null;
+        }
+        if (data.contains("import 'package:test/test.dart' as test_package;") ||
+            data.contains("import 'package:test/test.dart' as test_package show ")) {
+          if (count == 1)
+            return null;
+        }
+        return '  $name: uses \'package:test\' directly';
+      }
+      return null;
+    })
+    .where((String line) => line != null)
+    .toList()
+    ..sort();
+
+  // Fail if any errors
+  if (errors.isNotEmpty) {
+    print('$redLine');
+    final String s1 = errors.length == 1 ? 's' : '';
+    final String s2 = errors.length == 1 ? '' : 's';
+    print('${bold}The following file$s2 use$s1 \'package:test\' incorrectly:$reset');
+    print(errors.join('\n'));
+    print('Rather than depending on \'package:test\' directly, use one of the shims:');
+    print(shims.join('\n'));
+    print('This insulates us from breaking changes in \'package:test\'.');
+    print('$redLine\n');
+    exit(1);
+  }
+}
+
 Future<Null> _verifyNoBadImportsInFlutter(String workingDirectory) async {
   final List<String> errors = <String>[];
   final String libPath = path.join(workingDirectory, 'packages', 'flutter', 'lib');
@@ -429,8 +631,8 @@ Future<Null> _verifyNoBadImportsInFlutter(String workingDirectory) async {
     .map<String>((FileSystemEntity entity) => path.basenameWithoutExtension(entity.path))
     .toList()..sort();
   final List<String> directories = new Directory(srcPath).listSync()
-    .where((FileSystemEntity entity) => entity is Directory)
-    .map<String>((FileSystemEntity entity) => path.basename(entity.path))
+    .whereType<Directory>()
+    .map<String>((Directory entity) => path.basename(entity.path))
     .toList()..sort();
   if (!_matches(packages, directories)) {
     errors.add(
@@ -464,14 +666,14 @@ Future<Null> _verifyNoBadImportsInFlutter(String workingDirectory) async {
   }
   // Fail if any errors
   if (errors.isNotEmpty) {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     if (errors.length == 1) {
       print('${bold}An error was detected when looking at import dependencies within the Flutter package:$reset\n');
     } else {
       print('${bold}Multiple errors were detected when looking at import dependencies within the Flutter package:$reset\n');
     }
     print(errors.join('\n\n'));
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset\n');
+    print('$redLine\n');
     exit(1);
   }
 }
@@ -555,20 +757,19 @@ Future<Null> _verifyNoBadImportsInFlutterTools(String workingDirectory) async {
   }
   // Fail if any errors
   if (errors.isNotEmpty) {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     if (errors.length == 1) {
       print('${bold}An error was detected when looking at import dependencies within the flutter_tools package:$reset\n');
     } else {
       print('${bold}Multiple errors were detected when looking at import dependencies within the flutter_tools package:$reset\n');
     }
     print(errors.join('\n\n'));
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset\n');
+    print('$redLine\n');
     exit(1);
   }
 }
 
 void _printProgress(String action, String workingDir, String command) {
-  const String arrow = '⏩';
   print('$arrow $action: cd $cyan$workingDir$reset; $yellow$command$reset');
 }
 
@@ -606,13 +807,13 @@ Future<Null> _verifyGeneratedPluginRegistrants(String flutterRoot) async {
   }
 
   if (outOfDate.isNotEmpty) {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     print('${bold}The following GeneratedPluginRegistrants are out of date:$reset');
     for (String registrant in outOfDate) {
       print(' - $registrant');
     }
     print('\nRun "flutter inject-plugins" in the package that\'s out of date.');
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     exit(1);
   }
 }
@@ -628,30 +829,31 @@ String _getPackageFor(File entity, Directory flutterRootDir) {
 
 bool _isGeneratedPluginRegistrant(File file) {
   final String filename = path.basename(file.path);
-  return filename == 'GeneratedPluginRegistrant.java' ||
-      filename == 'GeneratedPluginRegistrant.h' ||
-      filename == 'GeneratedPluginRegistrant.m';
+  return !file.path.contains('.pub-cache')
+      && (filename == 'GeneratedPluginRegistrant.java' ||
+          filename == 'GeneratedPluginRegistrant.h' ||
+          filename == 'GeneratedPluginRegistrant.m');
 }
 
 Future<Null> _verifyVersion(String filename) async {
   if (!new File(filename).existsSync()) {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     print('The version logic failed to create the Flutter version file.');
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     exit(1);
   }
   final String version = await new File(filename).readAsString();
   if (version == '0.0.0-unknown') {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     print('The version logic failed to determine the Flutter version.');
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     exit(1);
   }
   final RegExp pattern = new RegExp(r'^[0-9]+\.[0-9]+\.[0-9]+(-pre\.[0-9]+)?$');
   if (!version.contains(pattern)) {
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     print('The version logic generated an invalid version string.');
-    print('$red━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$reset');
+    print('$redLine');
     exit(1);
   }
 }

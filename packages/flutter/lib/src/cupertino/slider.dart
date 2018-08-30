@@ -284,10 +284,10 @@ class _CupertinoSliderRenderObjectWidget extends LeafRenderObjectWidget {
 }
 
 const double _kPadding = 8.0;
-const Color _kTrackColor = const Color(0xFFB5B5B5);
+const Color _kTrackColor = Color(0xFFB5B5B5);
 const double _kSliderHeight = 2.0 * (CupertinoThumbPainter.radius + _kPadding);
 const double _kSliderWidth = 176.0; // Matches Material Design slider.
-const Duration _kDiscreteTransitionDuration = const Duration(milliseconds: 500);
+const Duration _kDiscreteTransitionDuration = Duration(milliseconds: 500);
 
 const double _kAdjustmentUnit = 0.1; // Matches iOS implementation of material slider.
 
@@ -331,6 +331,7 @@ class _RenderCupertinoSlider extends RenderConstrainedBox {
       _position.animateTo(newValue, curve: Curves.fastOutSlowIn);
     else
       _position.value = newValue;
+    markNeedsSemanticsUpdate();
   }
 
   int get divisions => _divisions;
@@ -503,8 +504,12 @@ class _RenderCupertinoSlider extends RenderConstrainedBox {
 
     config.isSemanticBoundary = isInteractive;
     if (isInteractive) {
+      config.textDirection = textDirection;
       config.onIncrease = _increaseAction;
       config.onDecrease = _decreaseAction;
+      config.value = '${(value * 100).round()}%';
+      config.increasedValue = '${((value + _semanticActionUnit).clamp(0.0, 1.0) * 100).round()}%';
+      config.decreasedValue = '${((value - _semanticActionUnit).clamp(0.0, 1.0) * 100).round()}%';
     }
   }
 

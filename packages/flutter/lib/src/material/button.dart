@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
@@ -27,8 +29,8 @@ import 'theme_data.dart';
 class RawMaterialButton extends StatefulWidget {
   /// Create a button based on [Semantics], [Material], and [InkWell] widgets.
   ///
-  /// The [shape], [elevation], [padding], and [constraints] arguments
-  /// must not be null.
+  /// The [shape], [elevation], [padding], [constraints], and [clipBehavior]
+  /// arguments must not be null.
   const RawMaterialButton({
     Key key,
     @required this.onPressed,
@@ -44,6 +46,7 @@ class RawMaterialButton extends StatefulWidget {
     this.constraints = const BoxConstraints(minWidth: 88.0, minHeight: 36.0),
     this.shape = const RoundedRectangleBorder(),
     this.animationDuration = kThemeChangeDuration,
+    this.clipBehavior = Clip.none,
     MaterialTapTargetSize materialTapTargetSize,
     this.child,
   }) : this.materialTapTargetSize = materialTapTargetSize ?? MaterialTapTargetSize.padded,
@@ -54,6 +57,7 @@ class RawMaterialButton extends StatefulWidget {
        assert(padding != null),
        assert(constraints != null),
        assert(animationDuration != null),
+       assert(clipBehavior != null),
        super(key: key);
 
   /// Called when the button is tapped or otherwise activated.
@@ -146,6 +150,9 @@ class RawMaterialButton extends StatefulWidget {
   ///   * [MaterialTapTargetSize], for a description of how this affects tap targets.
   final MaterialTapTargetSize materialTapTargetSize;
 
+  /// {@macro flutter.widgets.Clip}
+  final Clip clipBehavior;
+
   @override
   _RawMaterialButtonState createState() => new _RawMaterialButtonState();
 }
@@ -166,7 +173,7 @@ class _RawMaterialButtonState extends State<RawMaterialButton> {
       ? (_highlight ? widget.highlightElevation : widget.elevation)
       : widget.disabledElevation;
 
-    Widget result = new ConstrainedBox(
+    final Widget result = new ConstrainedBox(
       constraints: widget.constraints,
       child: new Material(
         elevation: elevation,
@@ -175,11 +182,13 @@ class _RawMaterialButtonState extends State<RawMaterialButton> {
         color: widget.fillColor,
         type: widget.fillColor == null ? MaterialType.transparency : MaterialType.button,
         animationDuration: widget.animationDuration,
+        clipBehavior: widget.clipBehavior,
         child: new InkWell(
           onHighlightChanged: _handleHighlightChanged,
           splashColor: widget.splashColor,
           highlightColor: widget.highlightColor,
           onTap: widget.onPressed,
+          customBorder: widget.shape,
           child: IconTheme.merge(
             data: new IconThemeData(color: widget.textStyle?.color),
             child: new Container(
@@ -194,29 +203,24 @@ class _RawMaterialButtonState extends State<RawMaterialButton> {
         ),
       ),
     );
-    BoxConstraints constraints;
+    Size minSize;
     switch (widget.materialTapTargetSize) {
       case MaterialTapTargetSize.padded:
-        constraints = const BoxConstraints(minWidth: 48.0, minHeight: 48.0);
+        minSize = const Size(48.0, 48.0);
         break;
       case MaterialTapTargetSize.shrinkWrap:
-        constraints = const BoxConstraints();
+        minSize = Size.zero;
         break;
     }
-    result = new _ButtonRedirectingHitDetectionWidget(
-      constraints: constraints,
-      child: new Center(
-        child: result,
-        widthFactor: 1.0,
-        heightFactor: 1.0,
-      ),
-    );
 
     return new Semantics(
       container: true,
       button: true,
       enabled: widget.enabled,
-      child: result,
+      child: new _InputPadding(
+        minSize: minSize,
+        child: result,
+      ),
     );
   }
 }
@@ -248,6 +252,8 @@ class MaterialButton extends StatelessWidget {
   /// Rather than creating a material button directly, consider using
   /// [FlatButton] or [RaisedButton]. To create a custom Material button
   /// consider using [RawMaterialButton].
+  ///
+  /// The [clipBehavior] argument must not be null.
   const MaterialButton({
     Key key,
     this.colorBrightness,
@@ -262,9 +268,10 @@ class MaterialButton extends StatelessWidget {
     this.height,
     this.padding,
     this.materialTapTargetSize,
+    this.clipBehavior = Clip.none,
     @required this.onPressed,
     this.child
-  }) : super(key: key);
+  }) : assert(clipBehavior != null), super(key: key);
 
   /// The theme brightness to use for this button.
   ///
@@ -376,6 +383,9 @@ class MaterialButton extends StatelessWidget {
   ///   * [MaterialTapTargetSize], for a description of how this affects tap targets.
   final MaterialTapTargetSize materialTapTargetSize;
 
+  /// {@macro flutter.widgets.Clip}
+  final Clip clipBehavior;
+
   /// Whether the button is enabled or disabled. Buttons are disabled by default. To
   /// enable a button, set its [onPressed] property to a non-null value.
   bool get enabled => onPressed != null;
@@ -436,6 +446,7 @@ class MaterialButton extends StatelessWidget {
       shape: buttonTheme.shape,
       child: child,
       materialTapTargetSize: materialTapTargetSize ?? theme.materialTapTargetSize,
+      clipBehavior: clipBehavior,
     );
   }
 
@@ -446,40 +457,88 @@ class MaterialButton extends StatelessWidget {
   }
 }
 
-/// Redirects the position passed to [RenderBox.hitTest] to the center of the
-/// widget if the child hit test would have failed otherwise.
+/// A widget to pad the area around a [MaterialButton]'s inner [Material].
 ///
-/// The primary purpose of this widget is to allow padding around [Material] widgets
-/// to trigger the child ink feature without increasing the size of the material.
-class _ButtonRedirectingHitDetectionWidget extends SingleChildRenderObjectWidget {
-  const _ButtonRedirectingHitDetectionWidget({
+/// Redirect taps that occur in the padded area around the child to the center
+/// of the child. This increases the size of the button and the button's
+/// "tap target", but not its material or its ink splashes.
+class _InputPadding extends SingleChildRenderObjectWidget {
+  const _InputPadding({
     Key key,
     Widget child,
-    this.constraints
+    this.minSize,
   }) : super(key: key, child: child);
 
-  final BoxConstraints constraints;
+  final Size minSize;
 
   @override
   RenderObject createRenderObject(BuildContext context) {
-    return new _RenderButtonRedirectingHitDetection(constraints);
+    return new _RenderInputPadding(minSize);
   }
 
   @override
-  void updateRenderObject(BuildContext context, covariant _RenderButtonRedirectingHitDetection renderObject) {
-    renderObject.additionalConstraints = constraints;
+  void updateRenderObject(BuildContext context, covariant _RenderInputPadding renderObject) {
+    renderObject.minSize = minSize;
   }
 }
 
-class _RenderButtonRedirectingHitDetection extends RenderConstrainedBox {
-  _RenderButtonRedirectingHitDetection (BoxConstraints additionalConstraints) : super(additionalConstraints: additionalConstraints);
+class _RenderInputPadding extends RenderShiftedBox {
+  _RenderInputPadding(this._minSize, [RenderBox child]) : super(child) ;
+
+  Size get minSize => _minSize;
+  Size _minSize;
+  set minSize(Size value) {
+    if (_minSize == value)
+      return;
+    _minSize = value;
+    markNeedsLayout();
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) {
+    if (child != null)
+      return math.max(child.getMinIntrinsicWidth(height), minSize.width);
+    return 0.0;
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) {
+    if (child != null)
+      return math.max(child.getMinIntrinsicHeight(width), minSize.height);
+    return 0.0;
+  }
+
+  @override
+  double computeMaxIntrinsicWidth(double height) {
+    if (child != null)
+      return math.max(child.getMaxIntrinsicWidth(height), minSize.width);
+    return 0.0;
+  }
+
+  @override
+  double computeMaxIntrinsicHeight(double width) {
+    if (child != null)
+      return math.max(child.getMaxIntrinsicHeight(width), minSize.height);
+    return 0.0;
+  }
+
+  @override
+  void performLayout() {
+    if (child != null) {
+      child.layout(constraints, parentUsesSize: true);
+      final double height = math.max(child.size.width, minSize.width);
+      final double width = math.max(child.size.height, minSize.height);
+      size = constraints.constrain(new Size(height, width));
+      final BoxParentData childParentData = child.parentData;
+      childParentData.offset = Alignment.center.alongOffset(size - child.size);
+    } else {
+      size = Size.zero;
+    }
+  }
 
   @override
   bool hitTest(HitTestResult result, {Offset position}) {
-    if (!size.contains(position))
-      return false;
-    if (child.hitTest(result, position: position))
-      return true;
-    return child.hitTest(result, position: size.center(Offset.zero));
+    return super.hitTest(result, position: position) ||
+      child.hitTest(result, position: child.size.center(Offset.zero));
   }
 }

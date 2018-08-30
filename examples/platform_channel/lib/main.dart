@@ -30,9 +30,9 @@ class TransData {
 
 class _PlatformChannelState extends State<PlatformChannel> {
   static const MethodChannel methodChannel =
-      const MethodChannel('samples.flutter.io/battery');
+      MethodChannel('samples.flutter.io/battery');
   static const EventChannel eventChannel =
-      const EventChannel('samples.flutter.io/charging');
+      EventChannel('samples.flutter.io/charging');
 
   static const MethodChannel methodPageChannel = const MethodChannel("samples.flutter.io/intent");
 

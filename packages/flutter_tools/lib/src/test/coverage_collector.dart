@@ -22,7 +22,7 @@ class CoverageCollector extends TestWatcher {
   Map<String, dynamic> _globalHitmap;
 
   @override
-  Future<void> onFinishedTest(ProcessEvent event) async {
+  Future<void> handleFinishedTest(ProcessEvent event) async {
     printTrace('test ${event.childIndex}: collecting coverage');
     await collectCoverage(event.process, event.observatoryUri);
   }
@@ -121,14 +121,6 @@ class CoverageCollector extends TestWatcher {
 
     const String baseCoverageData = 'coverage/lcov.base.info';
     if (mergeCoverageData) {
-      if (!platform.isLinux) {
-        printError(
-          'Merging coverage data is supported only on Linux because it '
-          'requires the "lcov" tool.'
-        );
-        return false;
-      }
-
       if (!fs.isFileSync(baseCoverageData)) {
         printError('Missing "$baseCoverageData". Unable to merge coverage data.');
         return false;
@@ -144,7 +136,7 @@ class CoverageCollector extends TestWatcher {
         return false;
       }
 
-      final Directory tempDir = fs.systemTempDirectory.createTempSync('flutter_tools');
+      final Directory tempDir = fs.systemTempDirectory.createTempSync('flutter_tools_test_coverage.');
       try {
         final File sourceFile = coverageFile.copySync(fs.path.join(tempDir.path, 'lcov.source.info'));
         final ProcessResult result = processManager.runSync(<String>[

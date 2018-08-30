@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../rendering/mock_canvas.dart';
 import '../widgets/semantics_tester.dart';
 
 void main() {
@@ -36,10 +38,10 @@ void main() {
     await tester.pumpWidget(
       new MaterialApp(
         home: const Scaffold(
-          floatingActionButton: const FloatingActionButton(
+          floatingActionButton: FloatingActionButton(
             onPressed: null,
             tooltip: 'Add',
-            child: const Icon(Icons.add),
+            child: Icon(Icons.add),
           ),
         ),
       ),
@@ -53,7 +55,7 @@ void main() {
     await tester.pumpWidget(
       new MaterialApp(
         home: const Scaffold(
-          floatingActionButton: const FloatingActionButton(
+          floatingActionButton: FloatingActionButton(
             onPressed: null,
             tooltip: 'Add',
           ),
@@ -109,7 +111,7 @@ void main() {
     await tester.pumpWidget(
       new MaterialApp(
         home: const Scaffold(
-          floatingActionButton: const FloatingActionButton(onPressed: null),
+          floatingActionButton: FloatingActionButton(onPressed: null),
         ),
       ),
     );
@@ -129,7 +131,7 @@ void main() {
           floatingActionButton: new FloatingActionButton.extended(
             label: const SizedBox(
               width: 100.0,
-              child: const Text('label'),
+              child: Text('label'),
             ),
             icon: const Icon(Icons.android),
             onPressed: null,
@@ -275,10 +277,10 @@ void main() {
     await tester.pumpWidget(
       const Directionality(
         textDirection: TextDirection.ltr,
-        child: const Center(
-          child: const FloatingActionButton(
+        child: Center(
+          child: FloatingActionButton(
             onPressed: null,
-            child: const Icon(Icons.add, semanticLabel: 'Add'),
+            child: Icon(Icons.add, semanticLabel: 'Add'),
           ),
         ),
       ),
@@ -344,5 +346,115 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets('extended FAB hero transitions succeed', (WidgetTester tester) async {
+    // Regression test for https://github.com/flutter/flutter/issues/18782
 
+    await tester.pumpWidget(
+      new MaterialApp(
+        home: new Scaffold(
+          floatingActionButton: new Builder(
+            builder: (BuildContext context) { // define context of Navigator.push()
+              return new FloatingActionButton.extended(
+                icon: const Icon(Icons.add),
+                label: const Text('A long FAB label'),
+                onPressed: () {
+                  Navigator.push(context, new MaterialPageRoute<void>(
+                    builder: (BuildContext context) {
+                      return new Scaffold(
+                        floatingActionButton: new FloatingActionButton.extended(
+                          icon: const Icon(Icons.add),
+                          label: const Text('X'),
+                          onPressed: () { },
+                        ),
+                        body: new Center(
+                          child: new RaisedButton(
+                            child: const Text('POP'),
+                            onPressed: () {
+                              Navigator.pop(context);
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  ));
+                },
+              );
+            },
+          ),
+          body: const Center(
+            child: Text('Hello World'),
+          ),
+        ),
+      ),
+    );
+
+    final Finder longFAB = find.text('A long FAB label');
+    final Finder shortFAB = find.text('X');
+    final Finder helloWorld = find.text('Hello World');
+
+    expect(longFAB, findsOneWidget);
+    expect(shortFAB, findsNothing);
+    expect(helloWorld, findsOneWidget);
+
+    await tester.tap(longFAB);
+    await tester.pumpAndSettle();
+
+    expect(shortFAB, findsOneWidget);
+    expect(longFAB, findsNothing);
+
+    // Trigger a hero transition from shortFAB to longFAB.
+    await tester.tap(find.text('POP'));
+    await tester.pumpAndSettle();
+
+    expect(longFAB, findsOneWidget);
+    expect(shortFAB, findsNothing);
+    expect(helloWorld, findsOneWidget);
+  });
+
+  // This test prevents https://github.com/flutter/flutter/issues/20483
+  testWidgets('Floating Action Button clips ink splash and highlight', (WidgetTester tester) async {
+    final GlobalKey key = new GlobalKey();
+    await tester.pumpWidget(
+      new MaterialApp(
+        home: new Scaffold(
+          body: new Center(
+            child: new RepaintBoundary(
+              key: key,
+              child: new FloatingActionButton(
+                onPressed: () {},
+                child: const Icon(Icons.add),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.press(find.byKey(key));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1000));
+    await expectLater(
+      find.byKey(key),
+      matchesGoldenFile('floating_action_button_test.clip.1.png'),
+      skip: !Platform.isLinux,
+    );
+  });
+
+  testWidgets('Floating Action Button has no clip by default', (WidgetTester tester) async{
+    await tester.pumpWidget(
+      new Directionality(
+          textDirection: TextDirection.ltr,
+          child: new Material(
+            child: new FloatingActionButton(
+              onPressed: () { /* to make sure the button is enabled */ },
+            ),
+          )
+      ),
+    );
+
+    expect(
+        tester.renderObject(find.byType(FloatingActionButton)),
+        paintsExactlyCountTimes(#clipPath, 0)
+    );
+  });
 }
